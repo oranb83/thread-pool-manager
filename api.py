@@ -6,39 +6,51 @@ from flask_expects_json import expects_json
 from orchestrator import Orchestrator
 
 CONTENT_TYPE_TEXT = 'application/json'
-DEBUG = os.getenv('DEBUG', True)
+DEBUG = os.getenv('DEBUG', False)
 app = Flask(__name__)
 schema = {
     'type': 'object',
     'properties': {
         'type': {'type': 'string'},
-        'task': {'type': 'string'}
+        'task': {'type': 'string'},
+        'parameters': {'type': 'array'}
     },
     'required': ['type', 'task']
 }
 
 orchest = Orchestrator()
 
+
 @app.route('/health')
 def health():
     return 'Strong like a bull!'
 
 
-@app.route('/worker', methods=['POST'])
+@app.route('/task', methods=['POST'])
 @expects_json(schema)
 def post_message():
     payload = request.json
-    schema_properties = schema['properties'].keys()
-    if len(payload) > len(schema_properties):
-        return 'bad request, only {} are allowed in the payload'.format(schema_properties), 400
-
     pool = orchest.get_or_create_pool(payload['type'])
     try:
-        pool.run(task)
+        orchest.add_task(pool, eval(payload['task']), *payload['parameters'])
     except Exception as e:
         return 'task failed: {}'.format(str(e)), 500
 
     return 'created', 201
+
+
+@app.route('/task/<pool_type>', methods=['GET'])
+def get_message(pool_type):
+    if not pool_type:
+        abort(400)
+
+    pool = orchest.get_or_create_pool(pool_type)
+    try:
+        results = orchest.get_results(pool)
+    except Exception as e:
+        return 'task failed: {}'.format(str(e)), 500
+
+    return jsonify(results)
 
 
 if __name__ == '__main__':

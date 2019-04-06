@@ -1,69 +1,119 @@
-import os
+from queue import Queue
+from threading import Thread, Event
+from sys import stdout, stderr
+from time import sleep
+from worker import Worker
 
 
+#default exception handler. if you want to take some action on failed tasks
+#maybe add the task back into the queue, then make your own handler and pass it in
+def default_handler(name, exception, *args, **kwargs):
+    print('%s raised %s with args %s and kwargs %s', name, str(exception), repr(args), repr(kwargs))
+
+#class for thread pool
 class Pool(object):
+    """Pool of threads consuming tasks from a queue"""
+    def __init__(self, max_workers, batch_mode=False, exception_handler=default_handler):
+        """Workers constructor"""
+        # block when adding tasks if no threads available to process
+        self.queue = Queue(thread_count if batch_mode else 0)
 
-    def __init__(self, min_workers=0, max_workers=10):
-        self.resize_lock = RLock()
-        self.debug_print_lock = RLock()
-        self.job_semaphore = Semaphore(0)
-        self.queue = deque()
-        self.min_workers = min_workers
-        self.available_workers = 0
-        self.start_workers(max_workers)
+        self.result_queue = Queue(0)
+        self.thread_count = max_workers
+        self.exception_handler = exception_handler
+        self.aborts = []
+        self.idles = []
+        self.workers = []
+
 
     def __del__(self):
-        self.terminate()
+        """Workers destructor"""
+        self.abort()
 
-    def _debug(self, message):
-        """Note: this can easily be changed to a logger, but a print is good enough for now"""
-        if not os.getenv('DEBUG', True):
-            return
+    def start_workers(self, block=False):
+        # Wait for threads to finish
+        if block:
+            while self.alive():
+                sleep(1)
+        elif self.alive():
+            return False
 
-        with self.debug_print_lock:
-            print('Pool: {}'.format(message))
+        # Start threads
+        self.aborts = []
+        self.idles = []
+        self.workers = []
+        for n in range(self.thread_count):
+            abort = Event()
+            idle = Event()
+            self.aborts.append(abort)
+            self.idles.append(idle)
+            self.workers.append(Worker('thread-%d' % n, self.queue, self.result_queue, abort, idle, self.exception_handler))
 
-    def start_workers(self, max_workers):
-        """Init all workers"""
-            for i in range(max_workers):
-                worker = Worker(self)
-                worker.start()
-                self.available_workers += 1
+        return True
 
-    def stop_workers(self, max_workers):
-        """Stop workers"""
-        self._debug('Stopping {} threads'.format(max_workers))
-        with self.resize_lock:
-            self.min_workers -= 1
-            self.add_task(None)
+    def add_task(self, func, *args, **kargs):
+        """Add a task to the queue"""
+        self.queue.put((func, args, kargs))
 
-    def terminate(self):
-        """Stop all active workers"""
-        self._debug('Terminating')
-        with self.resize_lock:
-            while self.min_workers > 0:
-                self.stop_workers(self.available_workers)
-
-    def add_task(self, func):
-        """Add a job"""
-        self._debug('Adding job {}'.format(str(func)))
-        self.queue.append(func)
-        self.job_semaphore.release()
-
-    def get_task(self):
+    def abort(self, block=False):
         """
-        Called by worker threads to get a job from the queue.
+        Terminat all workers
 
-        Note: each worker should call this method from it's own pull.
+        @type block: bool
+        @param block: block while thread is still running
         """
-        self.job_semaphore.acquire()
 
-        if self.min_workers < self.available_workers:
-            with self.resize_lock:
-                # Defensive approach for double lock, in case another thread
-                # already slipped in and acquired a lock on the last thread.
-                if self.min_workers < self.available_workers:
-                    # Return None to tell the worker thread to exit
-                    return None
+        # Tell the threads to stop after they are done with what they are currently doing
+        for a in self.aborts:
+            a.set()
+        # Wait for them to finish if requested
+        while block and self.alive():
+            sleep(1)
 
-        return self.queue.popleft()
+    def alive(self):
+        """
+        Check if workers are running
+
+        @rtype: bool
+        @return: True if all workers are running
+        """
+        return True in [t.is_alive() for t in self.workers]
+
+    def idle(self):
+        """
+        Check if workers are idle
+
+        @rtype: bool
+        @return: True if all workers are idle
+        """
+        return False not in [i.is_set() for i in self.idles]
+
+    def done(self):
+        """
+        Check if all tasks have been completed
+
+        @rtype: bool
+        @return: True if queue is empty (has no tasks)
+        """
+        return self.queue.empty()
+
+    def results(self, wait=0):
+        """
+        Get the set of results that have been processed
+
+        @type wait: int
+        @param wait: seconds to wait before operation is triggered
+        @rtype: bool
+        @return: True if queue is empty (has no tasks)
+        """
+        sleep(wait)
+        results = []
+        try:
+            while True:
+                results.append(self.result_queue.get(False))
+                self.result_queue.task_done()
+                sleep(0.1)
+        except:
+            pass
+
+        return results

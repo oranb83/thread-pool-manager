@@ -1,50 +1,35 @@
-import os
-
+from queue import Queue
 from threading import Thread
 
 
 class Worker(Thread):
-
-    def __init__(self, pool):
-        """
-        This is the start method as part of the constructor
-        """
-        self.pool = pool
+    """Worker extends theimplementation of threads"""
+    def __init__(self, name, queue, results, abort, idle, exception_handler):
         Thread.__init__(self)
-        self.id = self.name
-
-    @property
-    def status(self):
-        return str(self).split(', ')[-1][:-2]
-
-    def _debug(self, message):
-        # Note: this can easily be changed to a logger, but a print is good enough for now
-        if not os.getenv('DEBUG', True):
-            return
-
-        with self.pool.debug_print_lock:
-            print('id: {}, status: {}, message: {}'.format(self.id, self.status, message))
-
-    def terminate_worker(self):
-        """
-        This method should not be called, since it's force killing the thread.
-        A better implementation can be found in the pool "__del__" method to soft kill a thread.
-        """
-        self._stop()
+        self.name = name
+        self.queue = queue
+        self.results = results
+        self.abort = abort
+        self.idle = idle
+        self.exception_handler = exception_handler
+        self.daemon = True
+        self.start()
 
     def run(self):
-        """
-        This method executes the the worker
-        """
-        self._debug('Starting up')
-        while True:
-            self._debug('Waiting for a job')
-            job_func = self.pool.get_task()
+        """Run Forever, unless the abort signal is triggered"""
+        while not self.abort.is_set():
+            try:
+                func, args, kwargs = self.queue.get(False)
+                self.idle.clear()
+            except:
+                self.idle.set()
+                continue
 
-            if job_func is None:
-                self._debug('Pool has asked me to terminate. Bye!')
-                return
-
-            self._debug('Running job: {}'.format(str(job_func)))
-            print(job_func())
-            self._debug('Finished running job {}'.format(str(job_func)))
+            try:
+                result = func(*args, **kwargs)
+                if result is not None:
+                    self.results.put(result)
+            except Exception as e:
+                self.exception_handler(self.name, e, args, kwargs)
+            finally:
+                self.queue.task_done()
