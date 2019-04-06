@@ -18,10 +18,15 @@ This is an implementation of thread pool manager in Python3.
 
 ## Example of the API test run that I've made
 `curl -X POST http://localhost:5000/task -H 'content-type: application/json' -d '{"type": "int", "task": "lambda x, y : x + y", "parameters": [3,4]}'`
+
 `curl -X POST http://localhost:5000/task -H 'content-type: application/json' -d '{"type": "int", "task": "lambda x, y : x + y", "parameters": [1,4]}'`
+
 `curl -X POST http://localhost:5000/task -H 'content-type: application/json' -d '{"type": "int2", "task": "lambda x, y : x + y", "parameters": [2,4]}'`
+
 `curl -X POST http://localhost:5000/task -H 'content-type: application/json' -d '{"type": "int2", "task": "lambda x, y : x + y", "parameters": [2,3]}'`
+
 `curl http://localhost:5000/task/int2` => [6,5]
+
 `curl http://localhost:5000/task/int` => [7,5]
 
 ## Test
